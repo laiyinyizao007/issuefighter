@@ -35,6 +35,6 @@ jobs:
           # 代理方案：Claude Code CLI 读取此变量覆盖默认 api.anthropic.com 端点
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           trigger_phrase: "@claude"
           branch_prefix: "claude/"
