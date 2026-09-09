@@ -1,0 +1,40 @@
+name: Claude Issue Handler
+
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [opened]
+
+jobs:
+  claude:
+    # 成本控制：只允许仓库所有者触发
+    if: |
+      github.actor == github.repository_owner &&
+      (
+        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'issues' && (
+          contains(github.event.issue.body, '@claude') ||
+          contains(github.event.issue.title, '@claude')
+        ))
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        env:
+          # 代理方案：Claude Code CLI 读取此变量覆盖默认 api.anthropic.com 端点
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          trigger_phrase: "@claude"
+          branch_prefix: "claude/"
