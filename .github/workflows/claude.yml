@@ -75,27 +75,31 @@ jobs:
           ISSUE_TITLE: ${{ steps.extract.outputs.issue_title }}
           ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
         run: |
-          FULL_PROMPT="Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+          # 将 prompt 写入临时文件，避免多行字符串破坏 YAML
+          PROMPT_FILE=$(mktemp)
+          printf 'Issue #%s: %s\n\n%s' "$ISSUE_NUMBER" "$ISSUE_TITLE" "$PROMPT_CONTENT" > "$PROMPT_FILE"
 
-${PROMPT_CONTENT}"
           {
             echo 'result<<CLAUDE_EOF'
-            claude --print "$FULL_PROMPT" 2>/dev/null \
-              || echo "⚠️ Claude CLI 执行失败，请检查 Action 日志。"
+            claude --print "$(cat "$PROMPT_FILE")" 2>/dev/null \
+              || echo "Claude CLI 执行失败，请检查 Action 日志。"
             echo 'CLAUDE_EOF'
           } >> "$GITHUB_OUTPUT"
 
+          rm -f "$PROMPT_FILE"
+
       - name: Post comment to Issue
-        if: always() && steps.extract.outputs.issue_number != ''
+        if: always()
         uses: actions/github-script@v7
         env:
           CLAUDE_RESULT: ${{ steps.claude.outputs.result }}
+          ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
         with:
           script: |
-            const result = process.env.CLAUDE_RESULT || '';
-            const issueNumber = parseInt('${{ steps.extract.outputs.issue_number }}');
+            const issueNumber = parseInt(process.env.ISSUE_NUMBER || '');
             if (!issueNumber) return;
-            const body = result.trim() || '⚠️ Claude 处理完毕，但无文字输出。';
+            const result = process.env.CLAUDE_RESULT || '';
+            const body = result.trim() || 'Claude 处理完毕，但无文字输出。';
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
