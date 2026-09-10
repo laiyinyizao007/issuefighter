@@ -23,18 +23,75 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-      id-token: write
-      actions: read
+
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - uses: anthropics/claude-code-action@v1
-        env:
-          # 代理方案：Claude Code CLI 读取此变量覆盖默认 api.anthropic.com 端点
-          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+      - uses: actions/setup-node@v4
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          trigger_phrase: "@claude"
-          branch_prefix: "claude/"
+          node-version: '22'
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Extract trigger content
+        id: extract
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let rawContent, issueNumber, issueTitle;
+            if (context.eventName === 'issue_comment') {
+              rawContent = context.payload.comment.body;
+              issueNumber = context.payload.issue.number;
+              issueTitle = context.payload.issue.title;
+            } else {
+              rawContent = [
+                context.payload.issue.title,
+                context.payload.issue.body || ''
+              ].join('\n\n');
+              issueNumber = context.payload.issue.number;
+              issueTitle = context.payload.issue.title;
+            }
+            const content = rawContent.replace(/@claude\s*/gi, '').trim();
+            core.setOutput('content', content);
+            core.setOutput('issue_number', String(issueNumber));
+            core.setOutput('issue_title', issueTitle);
+
+      - name: Run Claude Code
+        id: claude
+        env:
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
+          PROMPT_CONTENT: ${{ steps.extract.outputs.content }}
+          ISSUE_TITLE: ${{ steps.extract.outputs.issue_title }}
+          ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
+        run: |
+          FULL_PROMPT="Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+
+${PROMPT_CONTENT}"
+          {
+            echo 'result<<CLAUDE_EOF'
+            claude --print "$FULL_PROMPT" 2>/dev/null \
+              || echo "⚠️ Claude CLI 执行失败，请检查 Action 日志。"
+            echo 'CLAUDE_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post comment to Issue
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          CLAUDE_RESULT: ${{ steps.claude.outputs.result }}
+        with:
+          script: |
+            const result = process.env.CLAUDE_RESULT || '';
+            const issueNumber = parseInt('${{ steps.extract.outputs.issue_number }}');
+            const body = result.trim() || '⚠️ Claude 处理完毕，但无文字输出。';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: body
+            });
