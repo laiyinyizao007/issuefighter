@@ -5,19 +5,23 @@ on:
     types: [created]
   issues:
     types: [opened]
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: '手动测试提示词'
+        required: true
+        default: '你好，请介绍一下你自己。'
 
 jobs:
   claude:
-    # 成本控制：只允许仓库所有者触发
-    if: |
-      github.actor == github.repository_owner &&
-      (
-        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-        (github.event_name == 'issues' && (
-          contains(github.event.issue.body, '@claude') ||
-          contains(github.event.issue.title, '@claude')
-        ))
-      )
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.actor == github.repository_owner &&
+      github.event_name == 'issue_comment' &&
+      contains(github.event.comment.body, '@claude')) ||
+      (github.actor == github.repository_owner &&
+      github.event_name == 'issues' &&
+      (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -41,22 +45,24 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            let rawContent, issueNumber, issueTitle;
-            if (context.eventName === 'issue_comment') {
-              rawContent = context.payload.comment.body;
-              issueNumber = context.payload.issue.number;
+            let content, issueNumber, issueTitle;
+            if (context.eventName === 'workflow_dispatch') {
+              content = context.payload.inputs.prompt;
+              issueNumber = '';
+              issueTitle = '手动测试';
+            } else if (context.eventName === 'issue_comment') {
+              content = context.payload.comment.body.replace(/@claude\s*/gi, '').trim();
+              issueNumber = String(context.payload.issue.number);
               issueTitle = context.payload.issue.title;
             } else {
-              rawContent = [
-                context.payload.issue.title,
-                context.payload.issue.body || ''
-              ].join('\n\n');
-              issueNumber = context.payload.issue.number;
-              issueTitle = context.payload.issue.title;
+              const body = context.payload.issue.body || '';
+              const title = context.payload.issue.title || '';
+              content = (title + '\n\n' + body).replace(/@claude\s*/gi, '').trim();
+              issueNumber = String(context.payload.issue.number);
+              issueTitle = title;
             }
-            const content = rawContent.replace(/@claude\s*/gi, '').trim();
             core.setOutput('content', content);
-            core.setOutput('issue_number', String(issueNumber));
+            core.setOutput('issue_number', issueNumber);
             core.setOutput('issue_title', issueTitle);
 
       - name: Run Claude Code
@@ -80,7 +86,7 @@ ${PROMPT_CONTENT}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Post comment to Issue
-        if: always()
+        if: always() && steps.extract.outputs.issue_number != ''
         uses: actions/github-script@v7
         env:
           CLAUDE_RESULT: ${{ steps.claude.outputs.result }}
@@ -88,6 +94,7 @@ ${PROMPT_CONTENT}"
           script: |
             const result = process.env.CLAUDE_RESULT || '';
             const issueNumber = parseInt('${{ steps.extract.outputs.issue_number }}');
+            if (!issueNumber) return;
             const body = result.trim() || '⚠️ Claude 处理完毕，但无文字输出。';
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -95,3 +102,9 @@ ${PROMPT_CONTENT}"
               issue_number: issueNumber,
               body: body
             });
+
+      - name: Print result (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CLAUDE_RESULT: ${{ steps.claude.outputs.result }}
+        run: echo "$CLAUDE_RESULT"
